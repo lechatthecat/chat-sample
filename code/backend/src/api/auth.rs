@@ -12,7 +12,6 @@ use bb8_postgres::{
 use crate::{
     api::jwt::jwt,
     db::model::user::User,
-    library::logger
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -54,13 +53,13 @@ pub async fn login(
                     HttpResponse::Ok().json(user_data)
                 },
                 Err(err) => {
-                    logger::log(logger::Header::ERROR, &err.to_string());
+                    //logger::log(logger::Header::ERROR, &err.to_string());
                     HttpResponse::InternalServerError().finish()
                 },
             }
         },
         Err(err) => {
-            logger::log(logger::Header::ERROR, &err.to_string());
+            //logger::log(logger::Header::ERROR, &err.to_string());
             HttpResponse::new(StatusCode::UNAUTHORIZED)
         }
     }
@@ -70,7 +69,7 @@ pub async fn current_user(req: HttpRequest) -> impl Responder {
     match jwt::verify(&req) {
         Ok(user_info) => HttpResponse::Ok().json(user_info),
         Err(err) => {
-            logger::log(logger::Header::ERROR, &err.to_string());
+            //logger::log(logger::Header::ERROR, &err.to_string());
             HttpResponse::new(StatusCode::UNAUTHORIZED)
         }
     }

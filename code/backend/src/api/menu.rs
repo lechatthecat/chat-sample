@@ -9,7 +9,7 @@ use bb8_postgres::{
 use tokio_postgres::NoTls;
 use crate::{
     db::model::menu::Menu,
-    library::logger
+    //library::logger
 };
 
 pub async fn get_menus(
@@ -43,7 +43,7 @@ pub async fn get_menus(
             }).collect::<Vec<Menu>>());
         },
         Err(err) => {
-            logger::log(logger::Header::ERROR, &err.to_string());
+            //logger::log(logger::Header::ERROR, &err.to_string());
             return HttpResponse::InternalServerError().finish();
         }
     };
@@ -79,7 +79,7 @@ pub async fn get_menu(
             );
         },
         Err(err) => {
-            logger::log(logger::Header::ERROR, &err.to_string());
+            //logger::log(logger::Header::ERROR, &err.to_string());
             return HttpResponse::InternalServerError().finish();
         }
     };

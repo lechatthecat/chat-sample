@@ -1,0 +1,11 @@
+apiVersion: skaffold/v4beta12
+kind: Config
+metadata:
+  name: minikube-dev-cluster
+deploy:
+  kubectl: {}
+manifests:
+  rawYaml:
+    - mongodb.yaml
+    - postgresdb.yaml
+    - redis.yaml

@@ -31,14 +31,14 @@ pub fn log(header: Header, message: &str) {
     };
 
     // Print the log to the console
-    println!("[{}] {} {}", Local::now().format("%m-%d-%Y %H:%M:%S").to_string(), header, message);
+    println!("[{}] {} {}", Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), header, message);
 
     // Write the log to a file
     if Path::new(&*LOG_PATH).exists() {
         let mut log_file = OpenOptions::new().append(true).open(&*LOG_PATH).unwrap();
-        writeln!(log_file, "[{}] {} {}", Local::now().format("%m-%d-%Y %H:%M:%S").to_string(), header, message).unwrap();
+        writeln!(log_file, "[{}] {} {}", Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), header, message).unwrap();
     } else {
         let mut log_file = OpenOptions::new().create_new(true).append(true).open(&*LOG_PATH).unwrap();
-        writeln!(log_file, "[{}] {} {}", Local::now().format("%m-%d-%Y %H:%M:%S").to_string(), header, message).unwrap();
+        writeln!(log_file, "[{}] {} {}", Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), header, message).unwrap();
     }
 }

@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster
+spec:
+  ports:
+    - port: 6379
+  clusterIP: None
+  selector:
+    app: redis-cluster
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster
+spec:
+  serviceName: redis-cluster
+  replicas: 6
+  selector:
+    matchLabels:
+      app: redis-cluster
+  template:
+    metadata:
+      labels:
+        app: redis-cluster
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+          ports:
+            - containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              value: mysecretpass
+          volumeMounts:
+            - name: config
+              mountPath: /etc/redis/
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: redis-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+data:
+  redis.conf: |
+    port 6379
+    cluster-enabled yes
+    cluster-config-file nodes.conf
+    cluster-node-timeout 5000
+    appendonly yes
+    requirepass mysecretpass
+    masterauth mysecretpass
+    protected-mode no
+    dir /data
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-cluster-init
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: redis-cli
+          image: redis:7.2
+          command:
+            - sh
+            - -c
+            - |
+                sleep 20  # 各Podが起動し切るのを待つ（環境で調整）
+                yes yes | redis-cli --cluster create \
+                  redis-cluster-0.redis-cluster:6379 \
+                  redis-cluster-1.redis-cluster:6379 \
+                  redis-cluster-2.redis-cluster:6379 \
+                  redis-cluster-3.redis-cluster:6379 \
+                  redis-cluster-4.redis-cluster:6379 \
+                  redis-cluster-5.redis-cluster:6379 \
+                  --cluster-replicas 1 \
+                  -a mysecretpass

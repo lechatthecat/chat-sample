@@ -49,7 +49,7 @@ where
             Err(_) => false
         };
 
-        if !is_logged_in && !(request.path() == "/api/auth/login" || request.path() == "/api/auth/current_user") {
+        if !is_logged_in {
             let (request, _pl) = request.into_parts();
 
             let response = HttpResponse::Unauthorized()

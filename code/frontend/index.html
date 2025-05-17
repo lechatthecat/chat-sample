@@ -18,6 +18,8 @@
         let keepAliveTimer = null;
         let es = null;
         function connect(){
+            if(keepAliveTimer != null)clearTimeout(keepAliveTimer);
+            keepAliveTimer = setTimeout(connect, 30 * 1000);
             if (typeof es != 'undefined' && es != null) {
                 es.close();
             }
@@ -31,8 +33,6 @@
             es.onerror = function(err) {
                 console.error("An error occurred.");
                 console.log(err);
-                if(keepAliveTimer != null)clearTimeout(keepAliveTimer);
-                keepAliveTimer = setTimeout(connect, 30 * 1000);
                 es.close();
                 connect();
             };

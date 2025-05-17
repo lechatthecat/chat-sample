@@ -1,19 +1,18 @@
-use actix_web::{HttpResponse, Responder, HttpRequest, web, http::StatusCode};
+use actix_web::{
+    HttpResponse,
+    Responder,
+    HttpRequest,
+    web,
+    //http::StatusCode
+};
 use bcrypt::verify;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     api::jwt::jwt,
+    api::requests::login_request::LoginRequest,
     db::repository::user_repository::UserDataRepository,
-    db::model::user::UserData,
     library::logger
 };
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LoginRequest {
-    name: String,
-    password: String,
-}
 
 // DIする場合はリポジトリもweb::Dataで渡す想定
 pub async fn login(

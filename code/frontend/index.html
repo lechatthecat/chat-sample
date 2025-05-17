@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSE Client</title>
+</head>
+<body>
+    <h1>SSE Events</h1>
+    <div id="events"></div>
+
+    <h2>Send Message</h2>
+    <form id="messageForm" autocomplete="off">
+        <input type="text" id="messageInput" placeholder="Type your message...">
+        <button type="submit" id="sendBtn">Send</button>
+    </form>
+
+    <script>
+        // SSE受信
+        let keepAliveTimer = null;
+        let es = null;
+        function connect(){
+            if (typeof es != 'undefined' && es != null) {
+                es.close();
+            }
+            es = new EventSource('http://localhost:8080/api/sse/events');
+            es.onmessage = function(event) {
+                const eventDiv = document.getElementById('events');
+                const p = document.createElement('p');
+                p.textContent = event.data;
+                eventDiv.appendChild(p);
+            };
+            es.onerror = function(err) {
+                console.error("An error occurred.");
+                console.log(err);
+                if(keepAliveTimer != null)clearTimeout(keepAliveTimer);
+                keepAliveTimer = setTimeout(connect, 30 * 1000);
+                es.close();
+                connect();
+            };
+        }
+
+        connect();
+
+        // フォーム送信でメッセージ送信
+        document.getElementById('messageForm').addEventListener('submit', async function(e) {
+            e.preventDefault(); // ページ遷移防止
+            const input = document.getElementById('messageInput');
+            const msg = input.value;
+            if (!msg) return;
+
+            await fetch('http://localhost:8080/api/sse/publish', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ msg })
+            });
+            input.value = '';
+        });
+    </script>
+</body>
+</html>

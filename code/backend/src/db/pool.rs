@@ -1,7 +1,6 @@
 use dotenv::dotenv;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::env;
-use tracing::log::LevelFilter;
 
 pub async fn get_db_pool() -> sqlx::Pool<sqlx::Postgres> {
     dotenv().ok(); // ← ここを一番最初に！

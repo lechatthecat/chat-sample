@@ -1,7 +1,11 @@
-use actix_web::{HttpResponse, Responder, HttpRequest, web};
+use actix_web::{
+    HttpResponse,
+    Responder,
+    HttpRequest,
+    web
+};
 use crate::{
     db::repository::user_repository::UserDataRepository,
-    db::model::user::UserData,
     library::logger,
 };
 

@@ -30,6 +30,13 @@ $ minikube kubectl port-forward svc/redis-cluster 6379:6379
 Please make tables by: init.sql
 Please make dummy data by: dummy_data.sql
 
+# Pubsub preparation and start app
+$ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your-service-account.json"
+$ minikube kubectl port-forward svc/postgres 5432:5432
+$ minikube kubectl port-forward svc/mongodb 27017:27017
+$ minikube kubectl port-forward svc/redis-cluster 6379:6379
+$ cargo run
+
 # Stopping minikube
 $ minikube stop
 If you don't want minikube's envrionment anymore:

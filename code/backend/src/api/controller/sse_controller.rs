@@ -1,20 +1,17 @@
 use actix_web::{
-    get,
     web,
-    App,
     Error,
     HttpResponse,
-    HttpServer
 };
-use futures_util::stream::Stream;
 use futures_util::StreamExt;
-use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use crate::{
     api::requests::publish_request::PublishRequest,
     library::logger,
 };
+use google_cloud_pubsub::publisher::Publisher;
+use google_cloud_googleapis::pubsub::v1::PubsubMessage;
 
 pub async fn events(
     broadcaster: web::Data<broadcast::Sender<String>>,
@@ -42,13 +39,36 @@ pub async fn events(
 
 pub async fn publish(
     req: web::Json<PublishRequest>,
-    broadcaster: web::Data<broadcast::Sender<String>>,
+    publisher: web::Data<Publisher>,
     pool: web::Data<sqlx::PgPool>
 ) -> HttpResponse {
-    broadcaster.send(req.into_inner().msg).unwrap();
-    HttpResponse::Ok()
-    .insert_header(("Cache-Control", "no-cache"))
-    .insert_header(("Content-Type", "text/event-stream"))
-    .insert_header(("Access-Control-Allow-Origin", "*"))
-    .body("Message broadcasted")
+    // https://crates.io/crates/google-cloud-pubsub
+    // https://crates.io/crates/google-cloud-googleapis
+    let msg = PubsubMessage {
+        data: req.into_inner().msg.into(),
+        // Set ordering_key if needed (https://cloud.google.com/pubsub/docs/ordering)
+        ordering_key: "order".into(),
+        ..Default::default()
+     };
+    //broadcaster.send(req.into_inner().msg).unwrap();
+    // Send a message. There are also `publish_bulk` and `publish_immediately` methods.
+    let awaiter = publisher.publish(msg).await;
+    // The get method blocks until a server-generated ID or an error is returned for the published message.
+    match awaiter.get().await {
+        Ok(_) => {
+            HttpResponse::Ok()
+            .insert_header(("Cache-Control", "no-cache"))
+            .insert_header(("Content-Type", "text/event-stream"))
+            .insert_header(("Access-Control-Allow-Origin", "*")) // TODO: ここは要修正
+            .body("Message broadcasted")
+        },
+        Err(err) => {
+            logger::log(logger::Header::ERROR, &format!("Failed to publish message: {}", err));
+            HttpResponse::InternalServerError()
+                .insert_header(("Cache-Control", "no-cache"))
+                .insert_header(("Content-Type", "text/event-stream"))
+                .insert_header(("Access-Control-Allow-Origin", "*")) // TODO: ここは要修正
+                .body("Failed to publish message")
+        },
+    }
 }

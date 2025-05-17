@@ -3,14 +3,17 @@ use actix_cors::Cors;
 use actix_web::{web::Data, App, HttpServer};
 use actix_web::middleware::Logger;
 use dotenv::dotenv;
+use google_cloud_pubsub::client::{Client, ClientConfig};
+use tokio_stream::StreamExt;
+use std::sync::Arc;
 use tokio::sync::broadcast;
+use tokio::time::{sleep, Duration};
 
 mod api;
 mod db;
 mod library;
 
 use library::logger;
-use api::redis;
 
 const PROJECT_PATH: &'static str = env!("CARGO_MANIFEST_DIR");
 
@@ -23,14 +26,42 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
     // Create the connection pool
     let pool = db::pool::get_db_pool().await;
-    // Broadcasting channel for SSE
-    let (tx, rx) = broadcast::channel::<String>(100);
-    
-    
-    let nodes = vec![
-        "redis://127.0.0.1:6379/",
-    ];
-    let actor = redis::RedisActor::new(nodes).await;
+    // Broadcasting channel for SSE 
+    let (tx, _rx) = broadcast::channel::<String>(2000);
+    // PubSubクライアント作成
+    let topic_id = std::env::var("TOPIC_NAME").expect("TOPIC_NAME must be set");
+    let subscribe_id = std::env::var("SUBSCRIBE_NAME").expect("SUBSCRIBE_NAME must be set");
+    let config = ClientConfig::default().with_auth().await.expect("Failed to create PubSub client config");
+    let pubsub_client = Client::new(config).await.expect("Failed to create PubSub client");
+    pubsub_client.topic(&topic_id);
+    let tx_clone = tx.clone();
+    let topic_id = std::env::var("TOPIC_NAME").expect("TOPIC_NAME must be set");
+    let topic = pubsub_client.topic(&topic_id);
+    // Start publisher.
+    let publisher = topic.new_publisher(None);
+    let subscription = pubsub_client.clone().subscription(&subscribe_id);
+    tokio::spawn(async move {
+        // Pull型ストリーム
+        let mut stream = subscription.subscribe(None).await.expect("failed to subscribe");
+        while let Some(message) = stream.next().await {
+            if let Ok(data) = String::from_utf8(message.message.data.clone()) {
+                let _ = tx_clone.send(data);
+            }
+            logger::log(logger::Header::INFO, "stream loop");
+            match message.ack().await {
+                Ok(_) => {}
+                Err(e) => {
+                    logger::log(logger::Header::ERROR, &format!("Failed to ack message: {}", e));
+                    // If ack fails, wait for a while before retrying
+                    sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
+    });
+
+    // Redis Cluster
+    let redis_url = &std::env::var("REDIS_URL").expect("REDIS_URL must be set");
+    let actor = api::redis::RedisActor::new(vec![redis_url]).await;
     let addr = actor.start();
 
     HttpServer::new(move || {
@@ -56,6 +87,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(Data::new(pool.clone()))
             .app_data(Data::new(tx.clone()))
             .app_data(Data::new(addr.clone()))
+            .app_data(Data::new(publisher.clone()))
             .service(api::api_handler::api_scope())
     })
     .bind("0.0.0.0:8080")?

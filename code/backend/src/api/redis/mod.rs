@@ -1,16 +1,128 @@
-use actix::prelude::*;
 use actix_web::{web, HttpResponse, Responder};
-use redis_cluster_async::{Client as ClusterClient, redis::{AsyncCommands, RedisError}};
-use std::sync::Arc;
+use actix::prelude::*;
+use redis::{cluster_async::ClusterConnection, cluster::ClusterClient, cluster::ClusterConfig};
 
 pub struct RedisActor {
-    client: Arc<ClusterClient>,
+    conn: ClusterConnection,
 }
 
 impl RedisActor {
-    pub async fn new(redis_nodes: Vec<&str>) -> Self {
-        let client = ClusterClient::open(redis_nodes).unwrap();
-        RedisActor { client: Arc::new(client) }
+    pub async fn new(redis_url: Vec<&str>) -> Self {
+        let client = ClusterClient::new(redis_url).unwrap(); // should be in env
+        let config = ClusterConfig::new()
+                                        .set_connection_timeout(std::time::Duration::from_secs(1))
+                                        .set_response_timeout(std::time::Duration::from_secs(1));
+        let conn = client.get_async_connection_with_config(config).await.unwrap();
+
+        RedisActor { conn }
+    }
+}
+
+#[derive(Message, Debug)]
+#[rtype(result = "Result<Option<String>, redis::RedisError>")]
+struct InfoCommand;
+
+#[derive(Message, Debug)]
+#[rtype(result = "Result<Option<String>, redis::RedisError>")]
+pub struct GetCommand {
+    pub key: String,
+}
+
+#[derive(Message, Debug)]
+#[rtype(result = "Result<bool, redis::RedisError>")]
+pub struct HasCommand {
+    pub key: String,
+}
+
+#[derive(Message, Debug)]
+#[rtype(result = "Result<Option<String>, redis::RedisError>")]
+pub struct SetCommand {
+    pub key: String,
+    pub value: String,
+    pub ex: Option<usize>, // Optional expiration time in seconds
+}
+
+impl Handler<InfoCommand> for RedisActor {
+    type Result = ResponseFuture<Result<Option<String>, redis::RedisError>>;
+
+    fn handle(&mut self, _msg: InfoCommand, _: &mut Self::Context) -> Self::Result {
+        let mut con = self.conn.clone();
+        let cmd = redis::cmd("INFO");
+        let fut = async move {
+            cmd.query_async(&mut con).await
+        };
+        Box::pin(fut)
+    }
+}
+
+impl<'a> Handler<GetCommand> for RedisActor {
+    type Result = ResponseFuture<Result<Option<String>, redis::RedisError>>;
+
+    fn handle(&mut self, msg: GetCommand, _: &mut Self::Context) -> Self::Result {
+        let mut con = self.conn.clone();
+        let key = msg.key.to_string();
+
+        let fut = async move {
+            redis::cmd("GET")
+                .arg(key)
+                .query_async(&mut con)
+                .await
+        };
+
+        Box::pin(fut)
+    }
+}
+
+// Implement the `HasCommand` to check if a key exists
+impl Handler<HasCommand> for RedisActor {
+    type Result = ResponseFuture<Result<bool, redis::RedisError>>;
+
+    fn handle(&mut self, msg: HasCommand, _: &mut Self::Context) -> Self::Result {
+        let mut con = self.conn.clone();
+        let key = msg.key.to_string();
+
+        let fut = async move {
+            let exists: bool = redis::cmd("EXISTS")
+                .arg(key)
+                .query_async(&mut con)
+                .await?;
+            Ok(exists)
+        };
+
+        Box::pin(fut)
+    }
+}
+
+// Modify the `SetCommand` to accept an expiration
+impl Handler<SetCommand> for RedisActor {
+    type Result = ResponseFuture<Result<Option<String>, redis::RedisError>>;
+
+    fn handle(&mut self, msg: SetCommand, _: &mut Self::Context) -> Self::Result {
+        let mut con = self.conn.clone();
+        let key = msg.key.to_string();
+        let value = msg.value.to_string();
+        let ex = msg.ex;
+
+        let fut = async move {
+            if let Some(expiration) = ex {
+                // If expiration is provided, use `SETEX`
+                redis::cmd("SETEX")
+                    .arg(key)
+                    .arg(expiration)
+                    .arg(value)
+                    .query_async(&mut con)
+                    .await
+            } else {
+                // If no expiration, use regular `SET`
+                redis::cmd("SET")
+                    .arg(key)
+                    .arg(value)
+                    .query_async(&mut con)
+                    .await
+            }
+        };
+
+        Box::pin(fut)
     }
 }
 
@@ -18,125 +130,55 @@ impl Actor for RedisActor {
     type Context = Context<Self>;
 }
 
-#[derive(Message)]
-#[rtype(result = "Result<Option<String>, RedisError>")]
-pub struct GetCommand {
-    pub key: String,
+pub async fn _info(redis: web::Data<Addr<RedisActor>>) -> impl Responder {
+    let res = redis.send(InfoCommand).await.unwrap().unwrap().unwrap();
+    HttpResponse::Ok().body(res)
 }
 
-#[derive(Message)]
-#[rtype(result = "Result<(), RedisError>")]
-pub struct SetCommand {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Message)]
-#[rtype(result = "Result<(), RedisError>")]
-pub struct SetExCommand {
-    pub key: String,
-    pub value: String,
-    pub ex: usize,
-}
-
-#[derive(Message)]
-#[rtype(result = "Result<bool, RedisError>")]
-pub struct HasCommand {
-    pub key: String,
-}
-
-impl Handler<GetCommand> for RedisActor {
-    type Result = ResponseFuture<Result<Option<String>, RedisError>>;
-    fn handle(&mut self, msg: GetCommand, _: &mut Self::Context) -> Self::Result {
-        let client = self.client.clone();
-        let key = msg.key;
-        Box::pin(async move {
-            let mut conn = client.get_connection().await?;
-            conn.get(key).await
-        })
+pub async fn get<'a>(
+    redis: &'a web::Data<Addr<RedisActor>>,
+    key: &'a str // Take ownership of the key
+) -> Result<String, Box<dyn std::error::Error>> {
+    // Send a GetCommand to the RedisActor, move the key into the command
+    match redis.send(GetCommand { key: key.to_string() }).await {
+        // If the message was sent successfully and the response is Ok
+        Ok(Ok(Some(value))) => Ok(value), // Return the value fetched from Redis
+        // If the response contains an error from Redis
+        Ok(Ok(None)) => Err("Key not found in Redis".into()), // Handle key not found
+        Ok(Err(redis_error)) => Err(Box::new(redis_error)), // Handle Redis errors
+        // If the actor communication fails
+        Err(mailbox_error) => Err(Box::new(mailbox_error)), // Handle Actix mailbox errors
     }
 }
 
-impl Handler<SetCommand> for RedisActor {
-    type Result = ResponseFuture<Result<(), RedisError>>;
-    fn handle(&mut self, msg: SetCommand, _: &mut Self::Context) -> Self::Result {
-        let client = self.client.clone();
-        let key = msg.key;
-        let value = msg.value;
-        Box::pin(async move {
-            let mut conn = client.get_connection().await?;
-            conn.set(key, value).await
-        })
+pub async fn has<'a>(
+    redis: &'a web::Data<Addr<RedisActor>>,
+    key: &'a str // Take ownership of the key
+) -> Result<bool, Box<dyn std::error::Error>> {
+    // Send a GetCommand to the RedisActor, move the key into the command
+    match redis.send(HasCommand { key: key.to_string() }).await {
+        // If the message was sent successfully and the response is Ok
+        Ok(Ok(true)) => Ok(true), // Return the value fetched from Redis
+        // If the response contains an error from Redis
+        Ok(Ok(false)) => Ok(false), // Handle key not found
+        Ok(Err(redis_error)) => Err(Box::new(redis_error)), // Handle Redis errors
+        // If the actor communication fails
+        Err(mailbox_error) => Err(Box::new(mailbox_error)), // Handle Actix mailbox errors
     }
 }
 
-impl Handler<SetExCommand> for RedisActor {
-    type Result = ResponseFuture<Result<(), RedisError>>;
-    fn handle(&mut self, msg: SetExCommand, _: &mut Self::Context) -> Self::Result {
-        let client = self.client.clone();
-        let key = msg.key;
-        let value = msg.value;
-        let ex = msg.ex;
-        Box::pin(async move {
-            let mut conn = client.get_connection().await?;
-            conn.set_ex(key, value, ex).await
-        })
-    }
-}
-
-impl Handler<HasCommand> for RedisActor {
-    type Result = ResponseFuture<Result<bool, RedisError>>;
-    fn handle(&mut self, msg: HasCommand, _: &mut Self::Context) -> Self::Result {
-        let client = self.client.clone();
-        let key = msg.key;
-        Box::pin(async move {
-            let mut conn = client.get_connection().await?;
-            conn.exists(key).await
-        })
-    }
-}
-
-pub async fn get(
-    redis: web::Data<Addr<RedisActor>>,
-    key: web::Path<String>,
-) -> impl Responder {
-    match redis.send(GetCommand { key: key.into_inner() }).await {
-        Ok(Ok(Some(val))) => HttpResponse::Ok().body(val),
-        Ok(Ok(None))      => HttpResponse::NotFound().body("not found"),
-        Ok(Err(e))        => HttpResponse::InternalServerError().body(format!("{:?}", e)),
-        Err(_)            => HttpResponse::InternalServerError().body("actor error"),
-    }
-}
-
-pub async fn set(
-    redis: web::Data<Addr<RedisActor>>,
-    item: web::Json<SetCommand>
-) -> impl Responder {
-    match redis.send(item.into_inner()).await {
-        Ok(Ok(_))   => HttpResponse::Ok().body("OK"),
-        Ok(Err(e))  => HttpResponse::InternalServerError().body(format!("{:?}", e)),
-        Err(_)      => HttpResponse::InternalServerError().body("actor error"),
-    }
-}
-
-pub async fn setex(
-    redis: web::Data<Addr<RedisActor>>,
-    item: web::Json<SetExCommand>
-) -> impl Responder {
-    match redis.send(item.into_inner()).await {
-        Ok(Ok(_))   => HttpResponse::Ok().body("OK"),
-        Ok(Err(e))  => HttpResponse::InternalServerError().body(format!("{:?}", e)),
-        Err(_)      => HttpResponse::InternalServerError().body("actor error"),
-    }
-}
-
-pub async fn has(
-    redis: web::Data<Addr<RedisActor>>,
-    key: web::Path<String>
-) -> impl Responder {
-    match redis.send(HasCommand { key: key.into_inner() }).await {
-        Ok(Ok(exists)) => HttpResponse::Ok().body(exists.to_string()),
-        Ok(Err(e))     => HttpResponse::InternalServerError().body(format!("{:?}", e)),
-        Err(_)         => HttpResponse::InternalServerError().body("actor error"),
+pub async fn setex<'a> (
+    redis: &'a web::Data<Addr<RedisActor>>,
+    key: &'a str,
+    value: &'a str,
+    ex: Option<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Send a GetCommand to the RedisActor, move the key into the command
+    match redis.send(SetCommand { key: key.to_string(), value: value.to_string(), ex }).await {
+        // If the message was sent successfully and the response is Ok
+        Ok(Ok(_)) => Ok(()), // Return the value fetched from Redis
+        Ok(Err(redis_error)) => Err(Box::new(redis_error)), // Handle Redis errors
+        // If the actor communication fails
+        Err(mailbox_error) => Err(Box::new(mailbox_error)), // Handle Actix mailbox errors
     }
 }
